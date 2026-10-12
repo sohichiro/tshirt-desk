@@ -119,6 +119,8 @@ function log(msg) {
   const t = new Date().toLocaleTimeString('ja-JP');
   $('log').textContent = t + '  ' + msg + '\n' + $('log').textContent;
 }
+window.addEventListener('error', (ev) => log('❌ JS エラー: ' + ev.message));
+window.addEventListener('unhandledrejection', (ev) => log('❌ 未処理の例外: ' + ((ev.reason && ev.reason.message) || ev.reason)));
 function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -381,13 +383,34 @@ $('search').oninput = (ev) => {
 
 // ===== 読み取り =====
 // 画像（動画の 1 フレーム / 写真）から読む。jsQR は inversionAttempts で白黒反転（ダークモード）も試す
-function decodeImage(source, w, h) {
-  const scale = Math.min(1, 1000 / Math.max(w, h)); // 大きい写真は縮めてから読む（速度のため）
-  canvas.width = Math.round(w * scale); canvas.height = Math.round(h * scale);
-  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+// crop を 0.6 などにすると中央 60% だけを切り出して読む（QR が小さく写っているとき用）
+function decodeImage(source, w, h, crop) {
+  if (!w || !h) return '';
+  let sx = 0, sy = 0, sw = w, sh = h;
+  if (crop && crop < 1) { sw = Math.round(w * crop); sh = Math.round(h * crop); sx = Math.round((w - sw) / 2); sy = Math.round((h - sh) / 2); }
+  const scale = Math.min(1, 1000 / Math.max(sw, sh)); // 大きい写真は縮めてから読む（速度のため）
+  canvas.width = Math.max(1, Math.round(sw * scale)); canvas.height = Math.max(1, Math.round(sh * scale));
+  ctx.drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
   const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
   return code ? code.data : '';
+}
+
+// ブラウザ内蔵の QR 検出（Android Chrome など）。無い/壊れている環境では jsQR だけを使う
+let detector = null;
+try { if ('BarcodeDetector' in window) detector = new BarcodeDetector({ formats: ['qr_code'] }); } catch (e) { detector = null; }
+
+// 動画の今のフレームを読む。内蔵検出 → jsQR 全体 → jsQR 中央 60% の順
+async function decodeFrame() {
+  const w = video.videoWidth, h = video.videoHeight;
+  if (!w || !h) return '';
+  if (detector) {
+    try {
+      const codes = await detector.detect(video);
+      if (codes && codes.length && codes[0].rawValue) return codes[0].rawValue;
+    } catch (e) { log('内蔵の QR 検出が使えないので jsQR に切り替え: ' + e.name); detector = null; }
+  }
+  return decodeImage(video, w, h) || decodeImage(video, w, h, 0.6);
 }
 
 async function start() {
@@ -408,7 +431,7 @@ async function start() {
   await video.play();
   $('start').style.display = 'none'; $('stop').style.display = '';
   const s = stream.getVideoTracks()[0].getSettings();
-  log('✅ カメラ起動: ' + s.width + 'x' + s.height + ' / ' + (s.facingMode || '向き不明'));
+  log('✅ カメラ起動: ' + s.width + 'x' + s.height + ' / ' + (s.facingMode || '向き不明') + ' / 検出: ' + (detector ? '内蔵+jsQR' : 'jsQR'));
   scanning = true;
   tick();
 }
@@ -421,14 +444,17 @@ function stop() {
   $('start').style.display = ''; $('stop').style.display = 'none';
 }
 
-let busy = false;
-function tick() {
+let busy = false, tickErrors = 0;
+async function tick() {
   if (!scanning) return;
   if (!busy && video.readyState >= 2) {
     busy = true;
-    const text = decodeImage(video, video.videoWidth, video.videoHeight);
-    if (text) show(text, 'カメラ');
-    busy = false;
+    try {
+      const text = await decodeFrame();
+      if (text) show(text, 'カメラ');
+    } catch (e) {
+      if (tickErrors++ < 3) log('❌ 読み取り中のエラー（続行します）: ' + ((e && e.message) || e));
+    } finally { busy = false; }
   }
   setTimeout(tick, 150);
 }
