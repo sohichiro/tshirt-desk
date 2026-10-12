@@ -96,7 +96,7 @@ function setupToken(overwrite) {
   }
   const t = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
   PropertiesService.getScriptProperties().setProperty('API_TOKEN', t);
-  Logger.log('API_TOKEN を' + (cur ? '作り直し' : '作り') + 'ました: ' + t + '\nページの URL: https://<org>.github.io/tshirt-desk/#t=' + t);
+  Logger.log('API_TOKEN を' + (cur ? '作り直し' : '作り') + 'ました: ' + t + '\nページの URL: https://sohichiro.github.io/tshirt-desk/#t=' + t);
   return t;
 }
 
