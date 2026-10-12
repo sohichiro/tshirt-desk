@@ -30,6 +30,8 @@
 const LUMA_BASE_URL = 'https://public-api.luma.com';
 const DEFAULT_EVENT_ID = 'evt-qUO00SlCqL95v5b';
 const DEFAULT_ROSTER_SHEET_ID = 2099335979; // 「参加者」タブ。566805125 は「参加者（全回答）」で、毎朝 4 時に作り直される
+const DEFAULT_SPEAKER_SHEET_ID = 0;                // 登壇者一覧「名簿」タブ（メールアドレス / アイコン URL = Sessionize の写真）
+const DEFAULT_SPEAKER_COMPARE_SHEET_ID = 20261012; // 同「ネームカード画像比較」タブ（No. = 名簿の行 / ネームプレート表示名（Luma））。無くても動く
 const PAGE_LIMIT = 50;             // guests/list の実測上限（luma-guest-sheet で確認済み）
 const CACHE_TTL_SEC = 600;         // 対応表をキャッシュする秒数
 const CACHE_KEY = 'tshirt-desk-table-v2';
@@ -44,6 +46,19 @@ const ROSTER_COLUMNS = {
   ticket: ['チケット種別', 'ticket_name', 'チケット'],
   display: ['表示名'],
   size: ['Tシャツ'],
+  github: ['GitHub'],
+};
+// 登壇者一覧「名簿」タブの列（見出しで探す）
+const SPEAKER_COLUMNS = {
+  email: ['メールアドレス'],
+  icon: ['アイコン URL', 'アイコンURL'],
+  name: ['登壇者名'],
+  realName: ['本名'],
+};
+// 登壇者一覧「ネームカード画像比較」タブの列。Luma のネームプレート表示名 → 名簿の行、でメールが食い違う人を救う
+const SPEAKER_COMPARE_COLUMNS = {
+  rowNo: ['No.'],
+  display: ['ネームプレート表示名'],
 };
 
 // ===== ウェブアプリ =====
@@ -104,7 +119,7 @@ function setupToken(overwrite) {
 
 /**
  * ブラウザに渡す対応表。force が真ならキャッシュを使わず作り直す。
- * 返すもの: { builtAt, fromCache, eventId, counts, rows: [[pk, maskedEmail, name, display, tickets, approval, size], ...] }
+ * 返すもの: { builtAt, fromCache, eventId, counts, rows: [[pk, maskedEmail, name, display, tickets, approval, size, avatarUrl], ...] }
  */
 function getTable(force, token) {
   requireToken_(token);
@@ -144,30 +159,35 @@ function lookupOne(pk, token) {
     throw err;
   }
   if (!guest) return null;
-  const row = guestToRow_(guest, readRoster_().byEmail);
+  const row = guestToRow_(guest, readRoster_().byEmail, readSpeakersSafe_());
   if (!row) return null;
-  return isEligible_(row) ? maskRow_(row) : [row[0], '', '', '', row[4], row[5], ''];
+  return isEligible_(row) ? maskRow_(row) : [row[0], '', '', '', row[4], row[5], '', ''];
 }
 
 function buildTable_() {
   const guests = fetchGuests_();
   const roster = readRoster_();
+  const speakers = readSpeakersSafe_();
   const rows = [];
-  let withSize = 0, noQr = 0, notInRoster = 0;
+  let withSize = 0, noQr = 0, notInRoster = 0, withAvatar = 0, speakerNoPhoto = 0;
   guests.forEach(function (g) {
-    const row = guestToRow_(g, roster.byEmail);
+    const row = guestToRow_(g, roster.byEmail, speakers);
     if (!row) { noQr++; return; }
     if (!isEligible_(row)) return;
     if (row[6]) withSize++;
+    if (row[7]) withAvatar++;
+    if (isSpeaker_(row[4]) && !isSessionizeUrl_(row[7])) speakerNoPhoto++;
     if (!(row[1] in roster.byEmail)) notInRoster++;
     rows.push(maskRow_(row));
   });
-  return {
+  const out = {
     builtAt: new Date().toISOString(),
     eventId: lumaEventId_(),
-    counts: { guests: guests.length, eligible: rows.length, withSize: withSize, noQr: noQr, notInRoster: notInRoster, roster: roster.count },
+    counts: { guests: guests.length, eligible: rows.length, withSize: withSize, noQr: noQr, notInRoster: notInRoster, roster: roster.count, withAvatar: withAvatar, speakerNoPhoto: speakerNoPhoto },
     rows: rows,
   };
+  if (speakers.error) out.warning = '登壇者一覧が読めないので Sessionize の写真は出ません: ' + speakers.error;
+  return out;
 }
 
 /** 配布対象: サイズがある、または Staff Pass / Speaker Pass を持つ */
@@ -191,24 +211,74 @@ function maskEmail_(email) {
 
 /**
  * Luma のゲスト 1 人を対応表の 1 行にする。QR が無いゲストは null。
- * 行の並び: [pk, email, name, display, tickets(' / ' 区切り), approval_status, size]
+ * 行の並び: [pk, email, name, display, tickets(' / ' 区切り), approval_status, size, avatarUrl]
+ * avatarUrl: Speaker Pass の人は登壇者一覧の Sessionize の写真、それ以外（と写真が見つからない人）は GitHub のアイコン。無ければ ''
  */
-function guestToRow_(g, rosterByEmail) {
+function guestToRow_(g, rosterByEmail, speakers) {
   const pk = pkOf_(g.check_in_qr_code);
   if (!pk) return null;
   const email = normEmail_(g.user_email);
   const r = rosterByEmail[email];
   const lumaName = String(g.user_name || [g.user_first_name, g.user_last_name].filter(Boolean).join(' ') || '').trim();
   const lumaTickets = (Array.isArray(g.event_tickets) ? g.event_tickets : []).map(function (t) { return String(t.name || '').trim(); }).filter(Boolean);
+  const tickets = (lumaTickets.length ? lumaTickets : (r ? r.tickets : [])).join(' / ');
   return [
     pk,
     email,
     (r && r.name) || lumaName,
     (r && r.display) || '',
-    (lumaTickets.length ? lumaTickets : (r ? r.tickets : [])).join(' / '),
+    tickets,
     String(g.approval_status || ''),
     (r && r.size) || '',
+    avatarOf_(g, r, lumaName, tickets, speakers),
   ];
+}
+
+// ===== 写真（アバター） =====
+
+function isSpeaker_(ticketsText) {
+  return String(ticketsText || '').split(' / ').some(function (t) { return t.trim() === 'Speaker Pass'; });
+}
+function isSessionizeUrl_(url) {
+  return /^https:\/\/cdn\.sessionize\.com\//.test(String(url || ''));
+}
+
+/**
+ * Speaker Pass の人: 登壇者一覧の Sessionize の写真を、メール → Luma のネームプレート表示名 → 名前（Luma の名前・名簿の名前・表示名）の順で探す。
+ * 見つからない人と Speaker Pass でない人: GitHub のアイコン（Luma の登録回答 → 参加者名簿の GitHub 列）。
+ */
+function avatarOf_(g, r, lumaName, ticketsText, speakers) {
+  if (isSpeaker_(ticketsText) && speakers && speakers.enabled) {
+    const display = r && r.display ? normName_(r.display) : '';
+    const url = speakers.byEmail[normEmail_(g.user_email)] ||
+      (display && speakers.byDisplay[display]) ||
+      speakers.byName[normName_(lumaName)] ||
+      (r && r.name && speakers.byName[normName_(r.name)]) ||
+      (display && speakers.byName[display]) || '';
+    if (url) return url;
+  }
+  const gh = githubOf_(g) || (r && r.github) || '';
+  return gh ? 'https://github.com/' + gh + '.png?size=200' : '';
+}
+
+/** Luma の登録回答から GitHub アカウント名。question_type === 'github' の専用質問（openapi には無い）か、ラベルに github を含む質問 */
+function githubOf_(g) {
+  const answers = Array.isArray(g.registration_answers) ? g.registration_answers : [];
+  let v = '';
+  answers.some(function (a) { if (a && String(a.question_type || '') === 'github' && a.value) { v = a.value; return true; } return false; });
+  if (!v) answers.some(function (a) { if (a && /github/i.test(String(a.label || '')) && a.value) { v = a.value; return true; } return false; });
+  return normalizeGithub_(v);
+}
+/** 'https://github.com/foo/bar?x' / '@foo' / 'foo' → 'foo'。アカウント名として変な値は '' */
+function normalizeGithub_(value) {
+  let v = String(value == null ? '' : value).trim();
+  if (!v) return '';
+  v = v.replace(/^https?:\/\/(www\.)?github\.com\//i, '').replace(/^@/, '').replace(/[\/?#].*$/, '').trim();
+  return /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/.test(v) ? v : '';
+}
+/** 名前の突合用: 小文字・空白（全角含む）を除く・先頭の @ を除く */
+function normName_(v) {
+  return String(v == null ? '' : v).toLowerCase().replace(/[\s\u3000]+/g, '').replace(/^@/, '');
 }
 
 /**
@@ -248,9 +318,68 @@ function readRoster_() {
       display: col.display >= 0 ? String(r[col.display] || '').trim() : '',
       tickets: String(r[col.ticket] || '').split(' / ').map(function (s) { return s.trim(); }).filter(Boolean),
       size: String(r[col.size] || '').trim(),
+      github: col.github >= 0 ? normalizeGithub_(r[col.github]) : '',
     };
   });
   return { byEmail: byEmail, count: count, header: header, col: col };
+}
+
+/**
+ * 登壇者一覧（スクリプト プロパティ SPEAKER_SPREADSHEET_ID）から Sessionize の写真 URL の表を作る。
+ * - 「名簿」タブ: メールアドレス → URL、登壇者名・本名 → URL
+ * - 「ネームカード画像比較」タブ（あれば）: ネームプレート表示名（Luma）→ URL（Luma と名簿でメールが違う人の救済）
+ * プロパティが無ければ enabled: false の空の表（スピーカーの写真が出ないだけで他は動く）。
+ */
+function readSpeakers_() {
+  const ssId = prop_('SPEAKER_SPREADSHEET_ID');
+  const out = { byEmail: {}, byName: {}, byDisplay: {}, count: 0, enabled: false };
+  if (!ssId) return out;
+  const ss = SpreadsheetApp.openById(ssId);
+  const sheetId = Number(prop_('SPEAKER_SHEET_ID') || DEFAULT_SPEAKER_SHEET_ID);
+  const sh = ss.getSheets().filter(function (s) { return s.getSheetId() === sheetId; })[0];
+  if (!sh) throw new Error('登壇者一覧に gid ' + sheetId + ' のタブがありません');
+  const values = sh.getDataRange().getValues();
+  const header = (values[0] || []).map(function (v) { return String(v == null ? '' : v).trim(); });
+  const col = {};
+  Object.keys(SPEAKER_COLUMNS).forEach(function (k) { col[k] = findColumn_(header, SPEAKER_COLUMNS[k]); });
+  if (col.email < 0 || col.icon < 0) throw new Error('登壇者一覧の「メールアドレス」「アイコン URL」列が見つかりません。見出し: ' + header.join(' | '));
+  out.enabled = true;
+  out.col = col;
+  const iconOfRow = {}; // 名簿の行番号（1 始まり）→ URL
+  values.forEach(function (r, i) {
+    if (i === 0) return;
+    const url = String(r[col.icon] || '').trim();
+    if (!/^https:\/\//.test(url)) return;
+    out.count++;
+    iconOfRow[i + 1] = url;
+    const email = normEmail_(r[col.email]);
+    if (email.indexOf('@') > 0 && !(email in out.byEmail)) out.byEmail[email] = url;
+    [col.name, col.realName].forEach(function (c) {
+      const k = c >= 0 ? normName_(r[c]) : '';
+      if (k && !(k in out.byName)) out.byName[k] = url;
+    });
+  });
+  const cmpId = Number(prop_('SPEAKER_COMPARE_SHEET_ID') || DEFAULT_SPEAKER_COMPARE_SHEET_ID);
+  const cmp = ss.getSheets().filter(function (s) { return s.getSheetId() === cmpId; })[0];
+  if (cmp) {
+    const cv = cmp.getDataRange().getValues();
+    const ch = (cv[0] || []).map(function (v) { return String(v == null ? '' : v).trim(); });
+    const cc = {};
+    Object.keys(SPEAKER_COMPARE_COLUMNS).forEach(function (k) { cc[k] = findColumn_(ch, SPEAKER_COMPARE_COLUMNS[k]); });
+    if (cc.rowNo >= 0 && cc.display >= 0) {
+      cv.slice(1).forEach(function (r) {
+        const k = normName_(r[cc.display]);
+        const url = iconOfRow[Number(r[cc.rowNo])];
+        if (k && url && !(k in out.byDisplay)) out.byDisplay[k] = url;
+      });
+    }
+  }
+  return out;
+}
+/** 登壇者一覧が読めなくても対応表は出す（写真が出ないだけ）。エラーは error に入れて返す */
+function readSpeakersSafe_() {
+  try { return readSpeakers_(); }
+  catch (err) { return { byEmail: {}, byName: {}, byDisplay: {}, count: 0, enabled: false, error: String(err.message || err) }; }
 }
 
 /** 見出しから列番号を探す。完全一致（大小無視）→ 部分一致。1 列に絞れなければ -1 */
@@ -378,6 +507,7 @@ function diagnose() {
   try { lumaApiKey_(); lines.push('✅ LUMA_API_KEY'); } catch (err) { lines.push('❌ ' + err.message); }
   lines.push('ℹ️ LUMA_EVENT_ID = ' + lumaEventId_() + (prop_('LUMA_EVENT_ID') ? '' : '（既定値）'));
   try { rosterSpreadsheetId_(); lines.push('✅ ROSTER_SPREADSHEET_ID'); } catch (err) { lines.push('❌ ' + err.message); }
+  lines.push(prop_('SPEAKER_SPREADSHEET_ID') ? '✅ SPEAKER_SPREADSHEET_ID' : 'ℹ️ SPEAKER_SPREADSHEET_ID が未設定（スピーカーの Sessionize の写真は出ない。GitHub のアイコンだけ）');
 
   try {
     const page = lumaGet_('/v1/events/guests/list', { event_id: lumaEventId_(), approval_status: 'approved', pagination_limit: 3 });
@@ -395,10 +525,20 @@ function diagnose() {
   } catch (err) { lines.push('❌ 参加者名簿: ' + err.message); }
 
   try {
+    const sp = readSpeakers_();
+    lines.push(sp.enabled
+      ? '✅ 登壇者一覧: 写真 ' + sp.count + ' 人（メール ' + Object.keys(sp.byEmail).length + ' / 表示名 ' + Object.keys(sp.byDisplay).length + ' / 名前 ' + Object.keys(sp.byName).length + '）/ 列 = ' + JSON.stringify(sp.col)
+      : 'ℹ️ 登壇者一覧: 使わない（SPEAKER_SPREADSHEET_ID 未設定）');
+  } catch (err) { lines.push('❌ 登壇者一覧: ' + err.message); }
+
+  try {
     const t = buildTable_();
     lines.push('✅ 対応表: ' + JSON.stringify(t.counts) + ' / JSON ' + JSON.stringify(t).length + ' 文字');
     const eligibleNoSize = t.rows.filter(function (r) { return !r[6]; }).length;
     lines.push('ℹ️ Staff/Speaker Pass なのにサイズが空: ' + eligibleNoSize + ' 人（未回答。当日は在庫から渡す）');
+    const noPhoto = t.rows.filter(function (r) { return isSpeaker_(r[4]) && !isSessionizeUrl_(r[7]); }).map(function (r) { return r[3] || r[2]; });
+    lines.push((noPhoto.length ? 'ℹ️' : '✅') + ' 写真あり ' + t.counts.withAvatar + ' 人 / Speaker Pass で Sessionize の写真が見つからない ' + noPhoto.length + ' 人' + (noPhoto.length ? ': ' + noPhoto.join(', ') : ''));
+    if (t.warning) lines.push('⚠ ' + t.warning);
   } catch (err) { lines.push('❌ 対応表: ' + err.message); }
 
   const out = lines.join('\n');

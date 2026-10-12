@@ -20,15 +20,18 @@
                  ▼
           GAS ウェブアプリ（匿名アクセス + API_TOKEN 必須）
                  │ Luma guests/list（check_in_qr_code = QR の pk）
-                 │ 参加者名簿「参加者」タブ（A 名前 / E チケット / F 表示名 / I Tシャツ。ID はスクリプト プロパティ）をメールで結ぶ
+                 │ 参加者名簿「参加者」タブ（A 名前 / C GitHub / E チケット / F 表示名 / I Tシャツ。ID はスクリプト プロパティ）をメールで結ぶ
+                 │ 登壇者一覧「名簿」タブ（メールアドレス / アイコン URL = Sessionize の写真。ID はスクリプト プロパティ、任意）
                  ▼
-          { pk → 名前・チケット・サイズ } の JSON（配布対象だけ・メールは伏せ字）
+          { pk → 名前・チケット・サイズ・写真 } の JSON（配布対象だけ・メールは伏せ字）
 ```
 
 - 読み取りはブラウザの中で引くだけ（1 人ごとに通信しない）。対応表は GAS 側で `CacheService` に 10 分置く。「再読み込み」で Luma から取り直す
 - 対応表に無い pk は `?q=lookup&pk=g-…` で 1 件引き直す（`guests/get` の `id` に g-… を渡せる）。当日登録した人・キャンセル済みの人もここで分かる。
   **対象外の人は名前・メールを返さず「対象外」とだけ答える**（全参加者の名簿を配らない）
 - サイズの元は参加者名簿の I 列（`speaker-team/tshirt-reconcile` の「作り直す」が書く）。**この仕組みは何も書き込まない**
+- 写真: **Speaker Pass の人は登壇者一覧の Sessionize の写真**（`SPEAKER_SPREADSHEET_ID`。メール → 「ネームカード画像比較」タブのネームプレート表示名 → 名前の順で突合）、
+  それ以外と見つからない人は **GitHub のアイコン**（Luma の登録回答 → 参加者名簿の C 列。`https://github.com/<user>.png`）。どちらも無ければ出ない
 - `index.html` は 1 つで両方に対応。`google.script.run` があれば GAS の中（トークンは `?token=…` から）、無ければ Pages（`fetch`）
 - QR の pk は 1 人 1 つの固定値（Apple Wallet とチケット画面で同じ）。`g-…` は Luma の guest key
 
@@ -48,6 +51,8 @@
 | サイズ 未回答 | 黄 | サイズが無く、Staff Pass / Speaker Pass を持つ → 在庫から渡す |
 | 対象外 | 灰 | サイズが無く、対象チケットでもない（名前は出ない） |
 | 承認済みではありません | 赤 | approval_status が approved 以外（キャンセル・保留） |
+
+名前の横に写真（Speaker Pass は Sessionize、それ以外は GitHub）。読めるたびに枠が光り、読み取り時刻と回数が出る（同じ QR を読み直したときも分かる）
 | 名簿にありません | 赤 | Luma にも無い pk、または別イベントの QR |
 
 読み取りは ① カメラ（Pages のみ） ② 写真 ③ バーコードリーダー／手入力。QR を出せない人は名前・表示名・メールで検索。
@@ -60,8 +65,9 @@ GAS 側は **clasp の `flutterkaigi` アカウント（ウェブアプリの実
 1. `clasp --user flutterkaigi login`（1〜2 日で切れる）→ 別ディレクトリに `clasp pull` して手元と diff（本番に手元に無い変更が無いか）
 2. `clasp --user flutterkaigi push -f` → `update-deployment …`（上の「GAS の更新」）。これで匿名アクセス + JSON API になる
 3. エディタで **`setupToken`** を実行 → ログに出たトークンを控える。「プロジェクトの設定 → スクリプト プロパティ」に
-   **`LUMA_API_KEY`**（luma-guest-sheet と同じ値）と **`ROSTER_SPREADSHEET_ID`**（参加者名簿のスプレッドシート ID）を入れる
-4. エディタで **`diagnose`** を実行 → 権限を承認（スプレッドシート読み取り・外部接続）→ ログに ✅ が 6 つ並び、`check_in_qr_code の形: … → pk=OK` と出れば OK。
+   **`LUMA_API_KEY`**（luma-guest-sheet と同じ値）と **`ROSTER_SPREADSHEET_ID`**（参加者名簿のスプレッドシート ID）を入れる。
+   スピーカーの写真を出すなら **`SPEAKER_SPREADSHEET_ID`**（登壇者一覧のスプレッドシート ID）も入れる（無くても動く）
+4. エディタで **`diagnose`** を実行 → 権限を承認（スプレッドシート読み取り・外部接続）→ ログに ❌ が無く、`check_in_qr_code の形: … → pk=OK` と出れば OK。
    `pk=取り出せない` でもページは動く（毎回 `guests/get` に g-… で聞きにいくので 1 人ごとに 1〜2 秒かかる）
 5. 匿名アクセスになったことを確かめる（HEAD は GAS が素直に答えないので GET で）:
    ```

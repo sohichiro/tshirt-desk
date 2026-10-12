@@ -29,10 +29,17 @@
   #result.off { border-color: var(--off); background: var(--off-bg); }
   #result.ng { border-color: var(--ng); background: var(--ng-bg); }
   #result.wait { border-style: dashed; }
+  @keyframes flash { 0% { transform: scale(1.04); box-shadow: 0 0 0 8px rgba(0,0,0,0.25); } 100% { transform: scale(1); box-shadow: none; } }
+  #result.flash { animation: flash 0.5s ease-out; }
+  #readInfo { font-size: 13px; color: var(--muted); margin: -4px 0 10px; min-height: 1.2em; }
   .size { font-size: clamp(72px, 26vw, 150px); font-weight: 800; line-height: 1; letter-spacing: -0.02em; margin: 4px 0 8px; white-space: nowrap; }
   .size small { font-size: 0.42em; font-weight: 700; color: var(--muted); margin-left: 0.1em; }
   .headline { font-size: 30px; font-weight: 800; margin: 4px 0 8px; }
   .name { font-size: 24px; font-weight: 700; word-break: break-all; }
+  .who { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+  .who > div { min-width: 0; }
+  .avatar { width: 96px; height: 96px; border-radius: 50%; object-fit: cover; flex: none; background: rgba(0,0,0,0.08); }
+  .avatar-sm { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; vertical-align: middle; margin-right: 6px; background: rgba(0,0,0,0.08); }
   .sub { font-size: 15px; color: var(--muted); margin-top: 4px; word-break: break-all; }
   .chip { display: inline-block; font-size: 14px; font-weight: 700; padding: 2px 10px; border-radius: 999px; background: #fff; border: 1px solid currentColor; margin-right: 6px; }
   .ok .chip { color: var(--ok); } .warn .chip { color: var(--warn); } .off .chip { color: var(--off); } .ng .chip { color: var(--ng); }
@@ -70,6 +77,7 @@
 </div>
 
 <div id="result" class="wait"><span class="muted">QR を読むと、ここにサイズと名前が出ます</span></div>
+<div id="readInfo"></div>
 
 <p class="muted" id="gasNote" style="display:none; margin:0 0 4px">この画面（Google Apps Script）ではカメラは使えません。②の写真か③のリーダー、または名前検索を使ってください。<span id="pagesLink"></span></p>
 <div class="row">
@@ -110,7 +118,7 @@ let token = '';
 let stream = null, scanning = false, lastPk = '', lastAt = 0;
 
 // ---- 対応表 ----
-// row = [pk, email(伏せ字), name, display, tickets(' / ' 区切り), approval_status, size]
+// row = [pk, email(伏せ字), name, display, tickets(' / ' 区切り), approval_status, size, avatarUrl]
 let table = null;          // サーバーから受け取ったまま
 let byPk = new Map();      // pk → row
 const missing = new Map(); // 対応表に無く Luma にも無かった pk → 聞いた時刻（60 秒は聞き直さない）
@@ -217,6 +225,7 @@ async function loadTable(force) {
     const at = new Date(t.builtAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
     $('status').textContent = t.rows.length + ' 人（サイズあり ' + t.counts.withSize + '）' + at + ' 時点' + (t.fromCache ? '' : ' ✦');
     log('対応表: ' + JSON.stringify(t.counts) + ' / builtAt=' + t.builtAt + ' / fromCache=' + t.fromCache);
+    if (t.warning) log('⚠ ' + t.warning);
     if (t.counts.noQr) log('⚠ QR の無いゲストが ' + t.counts.noQr + ' 人（check_in_qr_code が空）');
   } catch (e) {
     $('status').textContent = '読み込めませんでした';
@@ -282,15 +291,21 @@ function sizeHtml(size) {
   return m ? escapeHtml(m[1]) + '<small>' + escapeHtml(m[2]) + '</small>' : escapeHtml(size);
 }
 
+// 写真の URL は https のものだけ使う（対応表はトークンの向こうから来るが、念のため）
+function avatarImg(url, cls) {
+  return /^https:\/\//.test(String(url || '')) ? '<img class="' + cls + '" src="' + escapeHtml(url) + '" alt="" onerror="this.style.display=\'none\'">' : '';
+}
 function renderRow(row, how) {
-  const pk = row[0], email = row[1], name = row[2], display = row[3], tickets = row[4], approval = row[5], size = row[6];
+  const pk = row[0], email = row[1], name = row[2], display = row[3], tickets = row[4], approval = row[5], size = row[6], avatar = row[7];
   const r = $('result');
   const kubun = kubunOf(tickets);
   // 対象外の人は名前・メールが来ない（サーバー側で伏せる）ので、その行は出さない
-  const who = (display || name ? '<div class="name">' + escapeHtml(display || name) + '</div>' : '') +
+  const who = '<div class="who">' + avatarImg(avatar, 'avatar') + '<div>' +
+    (display || name ? '<div class="name">' + escapeHtml(display || name) + '</div>' : '') +
     (display && name && display !== name ? '<div class="sub">' + escapeHtml(name) + '</div>' : '') +
     '<div class="sub">' + (kubun ? '<span class="chip">' + escapeHtml(kubun) + '</span>' : '') + escapeHtml(tickets || 'チケットなし') + '</div>' +
-    (email ? '<div class="sub">' + escapeHtml(email) + '</div>' : '');
+    (email ? '<div class="sub">' + escapeHtml(email) + '</div>' : '') +
+    '</div></div>';
   let cls, main, hint = '';
   if (approval && approval !== 'approved') {
     cls = 'ng'; main = '<div class="headline">⚠ 承認済みではありません（' + escapeHtml(approval) + '）</div>';
@@ -326,6 +341,23 @@ function renderWait(pk, how) {
   r.innerHTML = '<div class="headline">Luma に問い合わせ中…</div><div class="muted">' + escapeHtml(how) + ' / ' + escapeHtml(pk) + '</div>';
 }
 
+// ===== 読めたときの合図 =====
+let readCount = 0, audioCtx = null;
+function unlockAudio() { // iOS は操作中に作った AudioContext しか鳴らせないので、ボタン押下の中で作る
+  try { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); if (audioCtx.state === 'suspended') audioCtx.resume(); } catch (e) { audioCtx = null; }
+}
+function notifyRead() {
+  const r = $('result');
+  r.classList.remove('flash'); void r.offsetWidth; r.classList.add('flash');
+  try {
+    if (!audioCtx) return;
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = 'sine'; o.frequency.value = 880; g.gain.value = 0.15;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + 0.12);
+  } catch (e) {}
+}
+
 async function show(text, how) {
   const luma = parseLuma(text);
   if (!luma) {
@@ -338,6 +370,9 @@ async function show(text, how) {
   const now = Date.now();
   if (luma.pk === lastPk && now - lastAt < 3000) return; // 同じ QR を連続で拾ったら 3 秒は無視
   lastPk = luma.pk; lastAt = now;
+  readCount++;
+  $('readInfo').textContent = '読み取り ' + new Date(now).toLocaleTimeString('ja-JP') + '（' + readCount + ' 回目 / ' + how + '）';
+  notifyRead();
   log('読めた（' + how + '）: ' + luma.pk + (luma.event ? ' / ' + luma.event : ''));
 
   if (table && luma.event && luma.event !== table.eventId) {
@@ -372,7 +407,7 @@ $('search').oninput = (ev) => {
   const hits = table.rows.filter((r) => [r[2], r[3], r[1]].some((v) => String(v || '').toLowerCase().indexOf(q) >= 0)).slice(0, 12);
   hits.forEach((r) => {
     const li = document.createElement('li');
-    li.innerHTML = '<span>' + escapeHtml(r[3] || r[2]) + (r[3] && r[2] && r[3] !== r[2] ? ' <span class="muted">' + escapeHtml(r[2]) + '</span>' : '') +
+    li.innerHTML = '<span>' + avatarImg(r[7], 'avatar-sm') + escapeHtml(r[3] || r[2]) + (r[3] && r[2] && r[3] !== r[2] ? ' <span class="muted">' + escapeHtml(r[2]) + '</span>' : '') +
       '<br><span class="muted">' + escapeHtml(r[4]) + ' / ' + escapeHtml(r[1]) + '</span></span>' +
       '<b class="sz">' + escapeHtml(r[6] || (hasTargetTicket(r[4]) ? '未回答' : '対象外')) + '</b>';
     li.onclick = () => { lastPk = ''; renderRow(r, '名前検索'); ul.innerHTML = ''; ev.target.value = ''; };
@@ -406,9 +441,12 @@ async function decodeFrame() {
   if (!w || !h) return '';
   if (detector) {
     try {
-      const codes = await detector.detect(video);
+      const codes = await Promise.race([
+        detector.detect(video),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 1500)),
+      ]);
       if (codes && codes.length && codes[0].rawValue) return codes[0].rawValue;
-    } catch (e) { log('内蔵の QR 検出が使えないので jsQR に切り替え: ' + e.name); detector = null; }
+    } catch (e) { log('内蔵の QR 検出が使えないので jsQR に切り替え: ' + (e.name === 'Error' ? e.message : e.name)); detector = null; }
   }
   return decodeImage(video, w, h) || decodeImage(video, w, h, 0.6);
 }
@@ -420,7 +458,7 @@ async function start() {
     return;
   }
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
   } catch (e) {
     log('❌ カメラを開けませんでした: ' + e.name + ' — ' + e.message);
     $('error').textContent = 'カメラを開けませんでした（' + e.name + '）。②写真 か ③リーダー／名前検索 を使ってください';
@@ -430,7 +468,9 @@ async function start() {
   video.style.display = 'block';
   await video.play();
   $('start').style.display = 'none'; $('stop').style.display = '';
-  const s = stream.getVideoTracks()[0].getSettings();
+  const track = stream.getVideoTracks()[0];
+  try { await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch (e) {}
+  const s = track.getSettings();
   log('✅ カメラ起動: ' + s.width + 'x' + s.height + ' / ' + (s.facingMode || '向き不明') + ' / 検出: ' + (detector ? '内蔵+jsQR' : 'jsQR'));
   scanning = true;
   tick();
@@ -459,7 +499,7 @@ async function tick() {
   setTimeout(tick, 150);
 }
 
-$('start').onclick = start;
+$('start').onclick = () => { unlockAudio(); start(); };
 $('stop').onclick = stop;
 
 $('file').onchange = (ev) => {
