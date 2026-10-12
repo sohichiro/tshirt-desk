@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Tシャツ受付</title>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script>if (typeof jsQR !== 'function') document.write('<script src="jsqr.js"><\/script>');</script>
+<style>
+  :root { --bg: #fff; --fg: #1a1a1a; --muted: #666; --line: #ddd; --accent: #4a3aa7;
+          --ok: #1b7f3b; --ok-bg: #e6f4ea; --warn: #9a6400; --warn-bg: #fff4d6; --off: #555; --off-bg: #eeeeee; --ng: #b3261e; --ng-bg: #fde7e5; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 12px 16px 24px; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif; background: var(--bg); color: var(--fg); }
+  h1 { font-size: 17px; margin: 0; }
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .top > div { min-width: 0; }
+  .status { font-size: 12px; color: var(--muted); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  button, label.btn { font-size: 16px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; background: #f5f5f5; color: var(--fg); cursor: pointer; }
+  button.primary, label.btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.small { font-size: 13px; padding: 6px 10px; }
+  button:disabled { opacity: .5; }
+  #video { width: 100%; max-width: 420px; aspect-ratio: 1; object-fit: cover; background: #000; border-radius: 8px; display: none; }
+  #video.compact { max-width: 180px; }
+  #result { margin: 10px 0; padding: 16px; border: 3px solid var(--line); border-radius: 12px; min-height: 120px; }
+  #result.ok { border-color: var(--ok); background: var(--ok-bg); }
+  #result.warn { border-color: var(--warn); background: var(--warn-bg); }
+  #result.off { border-color: var(--off); background: var(--off-bg); }
+  #result.ng { border-color: var(--ng); background: var(--ng-bg); }
+  #result.wait { border-style: dashed; }
+  .size { font-size: clamp(72px, 26vw, 150px); font-weight: 800; line-height: 1; letter-spacing: -0.02em; margin: 4px 0 8px; white-space: nowrap; }
+  .size small { font-size: 0.42em; font-weight: 700; color: var(--muted); margin-left: 0.1em; }
+  .headline { font-size: 30px; font-weight: 800; margin: 4px 0 8px; }
+  .name { font-size: 24px; font-weight: 700; word-break: break-all; }
+  .sub { font-size: 15px; color: var(--muted); margin-top: 4px; word-break: break-all; }
+  .chip { display: inline-block; font-size: 14px; font-weight: 700; padding: 2px 10px; border-radius: 999px; background: #fff; border: 1px solid currentColor; margin-right: 6px; }
+  .ok .chip { color: var(--ok); } .warn .chip { color: var(--warn); } .off .chip { color: var(--off); } .ng .chip { color: var(--ng); }
+  .hint { font-size: 14px; margin-top: 8px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .panel { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 10px 0; background: #fafafa; }
+  input[type=text], input[type=search], input[type=password] { font-size: 16px; padding: 10px; width: 100%; max-width: 480px; border: 1px solid var(--line); border-radius: 8px; }
+  #hits { list-style: none; padding: 0; margin: 6px 0 0; max-width: 480px; }
+  #hits li { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  #hits li b.sz { font-size: 20px; white-space: nowrap; }
+  details { margin-top: 16px; }
+  summary { color: var(--muted); font-size: 13px; cursor: pointer; }
+  #log { font-family: ui-monospace, Menlo, monospace; font-size: 12px; white-space: pre-wrap; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; }
+  a { color: var(--accent); }
+  #error { color: var(--ng); font-size: 14px; margin: 8px 0; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>Tシャツ受付</h1>
+  <div style="display:flex; gap:8px; align-items:center">
+    <span class="status" id="status">準備中…</span>
+    <button class="small" id="reload" disabled>再読み込み</button>
+  </div>
+</div>
+<div id="error"></div>
+
+<div class="panel" id="tokenPanel" style="display:none">
+  <div><b>トークンを入れてください</b></div>
+  <p class="muted" style="margin:6px 0">Slack で配られた URL（…/#t=…）から開くと自動で入ります。手で入れる場合は t= の後ろの文字列を貼ってください。</p>
+  <div class="row" style="margin:0">
+    <input id="tokenInput" type="password" placeholder="トークン" autocomplete="off" style="max-width:320px">
+    <button class="primary" id="tokenSave">保存</button>
+  </div>
+</div>
+
+<div id="result" class="wait"><span class="muted">QR を読むと、ここにサイズと名前が出ます</span></div>
+
+<p class="muted" id="gasNote" style="display:none; margin:0 0 4px">この画面（Google Apps Script）ではカメラは使えません。②の写真か③のリーダー、または名前検索を使ってください。<span id="pagesLink"></span></p>
+<div class="row">
+  <button class="primary" id="start">① カメラで読む</button>
+  <button id="stop" style="display:none">止める</button>
+  <label class="btn" id="fileBtn">② 写真を撮って読む
+    <input id="file" type="file" accept="image/*" capture="environment" style="display:none">
+  </label>
+</div>
+<video id="video" playsinline muted></video>
+<canvas id="canvas" style="display:none"></canvas>
+
+<p class="muted" style="margin-bottom:4px">③ バーコードリーダー／手入力（QR の URL か g-… を入れて Enter）</p>
+<input id="manual" type="text" placeholder="https://luma.com/check-in/evt-…?pk=g-…">
+
+<p class="muted" style="margin:14px 0 4px">QR が出せない人は名前・メールで探す</p>
+<input id="search" type="search" placeholder="名前 / 表示名 / メールの一部">
+<ul id="hits"></ul>
+
+<details>
+  <summary>ログ（うまく動かないときはここをスクリーンショット）</summary>
+  <div id="log"></div>
+  <p class="muted"><a href="#" id="tokenReset">トークンを入れ直す</a></p>
+</details>
+
+<script>
+// ===== 設定 =====
+// GAS のウェブアプリ（JSON API）。匿名アクセス用なので /macros/s/ の素の形（/a/macros/flutterkaigi.jp/ 付きだとログインに飛ばされる）
+const GAS_API_URL = 'https://script.google.com/macros/s/AKfycbzXS_GxHw1p9fvZYJzxxqvR_IPkKsDz2Z3rb4qsOV7aNckFWERaZwZtBlyY6SQX6gH7/exec';
+const PAGES_URL = 'https://flutterkaigi.github.io/tshirt-desk/'; // GAS から開いたときの案内に使う
+const TOKEN_KEY = 'tshirt-desk-token';
+const TARGET_TICKETS = ['Staff Pass', 'Speaker Pass'];
+
+const $ = (id) => document.getElementById(id);
+const video = $('video'), canvas = $('canvas'), ctx = canvas.getContext('2d', { willReadFrequently: true });
+const IN_GAS = !!(window.google && google.script && google.script.run); // GAS の中（予備）か、GitHub Pages か
+let token = '';
+let stream = null, scanning = false, lastPk = '', lastAt = 0;
+
+// ---- 対応表 ----
+// row = [pk, email(伏せ字), name, display, tickets(' / ' 区切り), approval_status, size]
+let table = null;          // サーバーから受け取ったまま
+let byPk = new Map();      // pk → row
+const missing = new Map(); // 対応表に無く Luma にも無かった pk → 聞いた時刻（60 秒は聞き直さない）
+
+function log(msg) {
+  const t = new Date().toLocaleTimeString('ja-JP');
+  $('log').textContent = t + '  ' + msg + '\n' + $('log').textContent;
+}
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+log('UA: ' + navigator.userAgent);
+log('GAS の中: ' + IN_GAS + ' / iframe: ' + (window.self !== window.top) +
+  ' / mediaDevices: ' + !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) +
+  ' / jsQR: ' + (typeof jsQR === 'function') +
+  ' / isSecureContext: ' + window.isSecureContext);
+
+// ===== トークン =====
+// GitHub Pages では URL の #t=…（サーバーにも GitHub にも送られない）から取り、端末に保存する。
+// GAS から開いたときは ?token=… か #t=… を google.script.url で読む
+function tokenFrom(hash, search) {
+  const srcs = [hash, search];
+  for (let i = 0; i < srcs.length; i++) {
+    const q = new URLSearchParams(String(srcs[i] || '').replace(/^[#?]/, ''));
+    const t = (q.get('t') || q.get('token') || '').trim();
+    if (t) return t;
+  }
+  return '';
+}
+
+function resolveToken() {
+  return new Promise((resolve) => {
+    if (IN_GAS) {
+      google.script.url.getLocation((loc) => {
+        const p = (loc && loc.parameter) || {};
+        resolve((p.token || p.t || tokenFrom(loc && loc.hash, '') || '').trim());
+      });
+      return;
+    }
+    let t = tokenFrom(location.hash, location.search);
+    if (t) {
+      try { localStorage.setItem(TOKEN_KEY, t); } catch (e) {}
+      try { history.replaceState(null, '', location.pathname); } catch (e) {} // 肩越しに見えないよう URL から消す
+    } else {
+      try { t = localStorage.getItem(TOKEN_KEY) || ''; } catch (e) {}
+    }
+    resolve(t);
+  });
+}
+
+function saveToken(t) {
+  token = t;
+  try { localStorage.setItem(TOKEN_KEY, t); } catch (e) {}
+}
+
+// ===== サーバー呼び出し（GAS の中なら google.script.run、外なら fetch） =====
+function friendlyError(e) {
+  const m = String((e && e.message) || e);
+  return /unauthorized/.test(m) ? 'トークンが違います' : m;
+}
+
+function gasRun(fn, args) {
+  return new Promise((resolve, reject) => {
+    const r = google.script.run.withSuccessHandler(resolve).withFailureHandler((e) => reject(new Error(friendlyError(e))));
+    r[fn].apply(r, args);
+  });
+}
+
+async function apiFetch(params) {
+  const q = new URLSearchParams(Object.assign({ token: token }, params, { _: String(Date.now()) }));
+  const res = await fetch(GAS_API_URL + '?' + q.toString(), { redirect: 'follow' });
+  const text = await res.text();
+  let obj;
+  try { obj = JSON.parse(text); }
+  catch (e) { throw new Error('JSON ではない応答（Google のログインに飛ばされたか、GAS 側の障害）: ' + text.replace(/\s+/g, ' ').slice(0, 80)); }
+  if (obj && obj.error) throw new Error(friendlyError(obj.error));
+  return obj;
+}
+
+const api = {
+  getTable: (force) => IN_GAS ? gasRun('getTable', [!!force, token]) : apiFetch({ q: 'table', force: force ? '1' : '' }),
+  lookupOne: (pk) => IN_GAS ? gasRun('lookupOne', [pk, token]) : apiFetch({ q: 'lookup', pk: pk }).then((o) => o.row),
+};
+
+// ===== 起動 =====
+function showTokenPanel(msg) {
+  $('status').textContent = msg || 'トークン未設定';
+  if (IN_GAS) { $('error').textContent = 'URL の末尾に ?token=… を付けて開いてください'; return; }
+  $('tokenPanel').style.display = '';
+}
+
+async function loadTable(force) {
+  $('reload').disabled = true;
+  $('status').textContent = force ? '作り直し中…（Luma から取り直すので 10〜20 秒）' : '名簿を読み込み中…';
+  $('error').textContent = '';
+  try {
+    const t = await api.getTable(force);
+    table = t;
+    byPk = new Map(t.rows.map((r) => [r[0], r]));
+    missing.clear();
+    const at = new Date(t.builtAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+    $('status').textContent = t.rows.length + ' 人（サイズあり ' + t.counts.withSize + '）' + at + ' 時点' + (t.fromCache ? '' : ' ✦');
+    log('対応表: ' + JSON.stringify(t.counts) + ' / builtAt=' + t.builtAt + ' / fromCache=' + t.fromCache);
+    if (t.counts.noQr) log('⚠ QR の無いゲストが ' + t.counts.noQr + ' 人（check_in_qr_code が空）');
+  } catch (e) {
+    $('status').textContent = '読み込めませんでした';
+    $('error').textContent = '名簿を読み込めませんでした: ' + e.message;
+    log('❌ getTable: ' + e.message);
+    if (/トークン/.test(e.message)) showTokenPanel('トークンが違います');
+  }
+  $('reload').disabled = false;
+}
+
+async function init() {
+  if (IN_GAS) {
+    $('start').style.display = 'none';
+    $('gasNote').style.display = '';
+    if (PAGES_URL) $('pagesLink').innerHTML = 'カメラ付きのページ: <a href="' + escapeHtml(PAGES_URL) + '">' + escapeHtml(PAGES_URL) + '</a>';
+  }
+  token = await resolveToken();
+  if (!token) { showTokenPanel(); return; }
+  loadTable(false);
+}
+$('reload').onclick = () => loadTable(true);
+$('tokenSave').onclick = () => {
+  const v = $('tokenInput').value.trim();
+  if (!v) return;
+  saveToken(v);
+  $('tokenInput').value = '';
+  $('tokenPanel').style.display = 'none';
+  loadTable(false);
+};
+$('tokenReset').onclick = (ev) => { ev.preventDefault(); try { localStorage.removeItem(TOKEN_KEY); } catch (e) {} token = ''; showTokenPanel('トークンを消しました'); };
+init();
+
+// ===== QR の中身 =====
+// Luma のチェックイン QR は https://luma.com/check-in/evt-…?pk=g-… （2026-10-09 に実物で確認）
+function parseLuma(text) {
+  text = String(text || '').trim();
+  if (/^g-[A-Za-z0-9]+$/.test(text)) return { event: '', pk: text };
+  try {
+    const u = new URL(text);
+    const m = u.pathname.match(/^\/check-in\/(evt-[A-Za-z0-9]+)/);
+    if (!/(^|\.)(luma\.com|lu\.ma)$/.test(u.hostname) || !m) return null;
+    const pk = u.searchParams.get('pk') || '';
+    return /^g-[A-Za-z0-9]+$/.test(pk) ? { event: m[1], pk: pk } : null;
+  } catch (e) { return null; }
+}
+
+// ===== 表示 =====
+function kubunOf(tickets) {
+  const t = tickets.split(' / ').map((s) => s.trim());
+  if (t.indexOf('Speaker Pass') >= 0) return 'スピーカー';
+  if (t.indexOf('Staff Pass') >= 0) return 'スタッフ';
+  if (t.some((x) => x.indexOf('Booth Staff') === 0)) return 'ブーススタッフ';
+  if (t.indexOf('Speaker Family Pass') >= 0) return 'スピーカー家族';
+  return '';
+}
+function hasTargetTicket(tickets) {
+  return tickets.split(' / ').some((s) => TARGET_TICKETS.indexOf(s.trim()) >= 0);
+}
+
+// 'LL (XL)' → LL を大きく (XL) を小さく。S / M / L はそのまま
+function sizeHtml(size) {
+  const m = String(size).match(/^(\S+)\s+(\(.+\))$/);
+  return m ? escapeHtml(m[1]) + '<small>' + escapeHtml(m[2]) + '</small>' : escapeHtml(size);
+}
+
+function renderRow(row, how) {
+  const pk = row[0], email = row[1], name = row[2], display = row[3], tickets = row[4], approval = row[5], size = row[6];
+  const r = $('result');
+  const kubun = kubunOf(tickets);
+  // 対象外の人は名前・メールが来ない（サーバー側で伏せる）ので、その行は出さない
+  const who = (display || name ? '<div class="name">' + escapeHtml(display || name) + '</div>' : '') +
+    (display && name && display !== name ? '<div class="sub">' + escapeHtml(name) + '</div>' : '') +
+    '<div class="sub">' + (kubun ? '<span class="chip">' + escapeHtml(kubun) + '</span>' : '') + escapeHtml(tickets || 'チケットなし') + '</div>' +
+    (email ? '<div class="sub">' + escapeHtml(email) + '</div>' : '');
+  let cls, main, hint = '';
+  if (approval && approval !== 'approved') {
+    cls = 'ng'; main = '<div class="headline">⚠ 承認済みではありません（' + escapeHtml(approval) + '）</div>';
+    hint = 'キャンセル済み・保留などの登録です。渡さないでください';
+  } else if (size) {
+    cls = 'ok'; main = '<div class="size">' + sizeHtml(size) + '</div>';
+  } else if (hasTargetTicket(tickets)) {
+    cls = 'warn'; main = '<div class="headline">サイズ 未回答</div>';
+    hint = '配布対象ですがサイズの回答がありません。在庫から希望のサイズを渡してください';
+  } else {
+    cls = 'off'; main = '<div class="headline">対象外</div>';
+    hint = 'Tシャツは Staff Pass / Speaker Pass の人に渡します';
+  }
+  r.className = cls;
+  r.innerHTML = main + who + (hint ? '<div class="hint">' + escapeHtml(hint) + '</div>' : '') +
+    '<div class="muted" style="margin-top:8px">' + escapeHtml(how) + ' / ' + escapeHtml(pk) + '</div>';
+  if (navigator.vibrate) navigator.vibrate(cls === 'ok' ? 80 : [80, 60, 80]);
+  video.classList.add('compact');
+}
+
+function renderNotFound(pk, how, note) {
+  const r = $('result');
+  r.className = 'ng';
+  r.innerHTML = '<div class="headline">名簿にありません</div>' +
+    '<div class="hint">' + escapeHtml(note || 'この QR は Luma の参加者に見つかりませんでした。名前で探してみてください') + '</div>' +
+    '<div class="muted" style="margin-top:8px">' + escapeHtml(how) + ' / ' + escapeHtml(pk) + '</div>';
+  if (navigator.vibrate) navigator.vibrate([80, 60, 80, 60, 80]);
+}
+
+function renderWait(pk, how) {
+  const r = $('result');
+  r.className = 'wait';
+  r.innerHTML = '<div class="headline">Luma に問い合わせ中…</div><div class="muted">' + escapeHtml(how) + ' / ' + escapeHtml(pk) + '</div>';
+}
+
+async function show(text, how) {
+  const luma = parseLuma(text);
+  if (!luma) {
+    const r = $('result');
+    r.className = 'ng';
+    r.innerHTML = '<div class="headline">Luma の QR ではありません</div><div class="sub">' + escapeHtml(text) + '</div><div class="muted">' + escapeHtml(how) + '</div>';
+    log('読めたが Luma ではない（' + how + '）: ' + text);
+    return;
+  }
+  const now = Date.now();
+  if (luma.pk === lastPk && now - lastAt < 3000) return; // 同じ QR を連続で拾ったら 3 秒は無視
+  lastPk = luma.pk; lastAt = now;
+  log('読めた（' + how + '）: ' + luma.pk + (luma.event ? ' / ' + luma.event : ''));
+
+  if (table && luma.event && luma.event !== table.eventId) {
+    renderNotFound(luma.pk, how, '別のイベント（' + luma.event + '）の QR です。FlutterKaigi 2026 は ' + table.eventId);
+    return;
+  }
+  if (!table) { renderNotFound(luma.pk, how, '名簿がまだ読み込めていません。少し待ってからもう一度読んでください'); return; }
+
+  const row = byPk.get(luma.pk);
+  if (row) { renderRow(row, how); return; }
+
+  // 対応表に無い → Luma に 1 件だけ聞く（当日登録・キャンセル済み・対象外の救済）
+  const askedAt = missing.get(luma.pk) || 0;
+  if (now - askedAt < 60000) { renderNotFound(luma.pk, how); return; }
+  renderWait(luma.pk, how);
+  try {
+    const r = await api.lookupOne(luma.pk);
+    if (r) { byPk.set(r[0], r); log('Luma から 1 件取得: ' + r[0] + ' / ' + r[5] + ' / size=' + (r[6] || '(空)')); renderRow(r, how + ' / Luma 個別'); }
+    else { missing.set(luma.pk, Date.now()); log('Luma にも無い: ' + luma.pk); renderNotFound(luma.pk, how); }
+  } catch (e) {
+    log('❌ lookupOne: ' + e.message);
+    renderNotFound(luma.pk, how, 'Luma に問い合わせできませんでした: ' + e.message);
+  }
+}
+
+// ===== 名前検索 =====
+$('search').oninput = (ev) => {
+  const q = ev.target.value.trim().toLowerCase();
+  const ul = $('hits');
+  ul.innerHTML = '';
+  if (!q || !table || q.length < 2) return;
+  const hits = table.rows.filter((r) => [r[2], r[3], r[1]].some((v) => String(v || '').toLowerCase().indexOf(q) >= 0)).slice(0, 12);
+  hits.forEach((r) => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span>' + escapeHtml(r[3] || r[2]) + (r[3] && r[2] && r[3] !== r[2] ? ' <span class="muted">' + escapeHtml(r[2]) + '</span>' : '') +
+      '<br><span class="muted">' + escapeHtml(r[4]) + ' / ' + escapeHtml(r[1]) + '</span></span>' +
+      '<b class="sz">' + escapeHtml(r[6] || (hasTargetTicket(r[4]) ? '未回答' : '対象外')) + '</b>';
+    li.onclick = () => { lastPk = ''; renderRow(r, '名前検索'); ul.innerHTML = ''; ev.target.value = ''; };
+    ul.appendChild(li);
+  });
+  if (!hits.length) { const li = document.createElement('li'); li.textContent = '見つかりません'; ul.appendChild(li); }
+};
+
+// ===== 読み取り =====
+// 画像（動画の 1 フレーム / 写真）から読む。jsQR は inversionAttempts で白黒反転（ダークモード）も試す
+function decodeImage(source, w, h) {
+  const scale = Math.min(1, 1000 / Math.max(w, h)); // 大きい写真は縮めてから読む（速度のため）
+  canvas.width = Math.round(w * scale); canvas.height = Math.round(h * scale);
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
+  return code ? code.data : '';
+}
+
+async function start() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    log('❌ この画面ではカメラ API が使えません（mediaDevices なし）。② か ③ を試してください');
+    $('error').textContent = 'この画面ではカメラが使えません。②写真 か ③リーダー／名前検索 を使ってください';
+    return;
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+  } catch (e) {
+    log('❌ カメラを開けませんでした: ' + e.name + ' — ' + e.message);
+    $('error').textContent = 'カメラを開けませんでした（' + e.name + '）。②写真 か ③リーダー／名前検索 を使ってください';
+    return;
+  }
+  video.srcObject = stream;
+  video.style.display = 'block';
+  await video.play();
+  $('start').style.display = 'none'; $('stop').style.display = '';
+  const s = stream.getVideoTracks()[0].getSettings();
+  log('✅ カメラ起動: ' + s.width + 'x' + s.height + ' / ' + (s.facingMode || '向き不明'));
+  scanning = true;
+  tick();
+}
+
+function stop() {
+  scanning = false;
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+  video.style.display = 'none';
+  $('start').style.display = ''; $('stop').style.display = 'none';
+}
+
+let busy = false;
+function tick() {
+  if (!scanning) return;
+  if (!busy && video.readyState >= 2) {
+    busy = true;
+    const text = decodeImage(video, video.videoWidth, video.videoHeight);
+    if (text) show(text, 'カメラ');
+    busy = false;
+  }
+  setTimeout(tick, 150);
+}
+
+$('start').onclick = start;
+$('stop').onclick = stop;
+
+$('file').onchange = (ev) => {
+  const f = ev.target.files && ev.target.files[0];
+  if (!f) return;
+  const img = new Image();
+  img.onload = () => {
+    const text = decodeImage(img, img.naturalWidth, img.naturalHeight);
+    if (text) { lastPk = ''; show(text, '写真'); }
+    else { log('❌ 写真から QR を読めませんでした（' + img.naturalWidth + 'x' + img.naturalHeight + '）'); $('error').textContent = '写真から QR を読めませんでした。もう少し近づいて撮ってください'; }
+    URL.revokeObjectURL(img.src);
+  };
+  img.src = URL.createObjectURL(f);
+  ev.target.value = '';
+};
+
+$('manual').onkeydown = (ev) => {
+  if (ev.key !== 'Enter') return;
+  const v = ev.target.value.trim();
+  if (v) { lastPk = ''; show(v, '手入力 / リーダー'); }
+  ev.target.value = '';
+};
+</script>
+</body>
+</html>
