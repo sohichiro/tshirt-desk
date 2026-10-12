@@ -29,8 +29,6 @@
   #result.off { border-color: var(--off); background: var(--off-bg); }
   #result.ng { border-color: var(--ng); background: var(--ng-bg); }
   #result.wait { border-style: dashed; }
-  @keyframes flash { 0% { transform: scale(1.04); box-shadow: 0 0 0 8px rgba(0,0,0,0.25); } 100% { transform: scale(1); box-shadow: none; } }
-  #result.flash { animation: flash 0.5s ease-out; }
   #readInfo { font-size: 13px; color: var(--muted); margin: -4px 0 10px; min-height: 1.2em; }
   .size { font-size: clamp(72px, 26vw, 150px); font-weight: 800; line-height: 1; letter-spacing: -0.02em; margin: 4px 0 8px; white-space: nowrap; }
   .size small { font-size: 0.42em; font-weight: 700; color: var(--muted); margin-left: 0.1em; }
@@ -347,8 +345,8 @@ function unlockAudio() { // iOS は操作中に作った AudioContext しか鳴�
   try { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); if (audioCtx.state === 'suspended') audioCtx.resume(); } catch (e) { audioCtx = null; }
 }
 function notifyRead() {
-  const r = $('result');
-  r.classList.remove('flash'); void r.offsetWidth; r.classList.add('flash');
+  // 直後の renderRow が className を丸ごと入れ替えるので、クラスではなく animate() で光らせる
+  try { $('result').animate([{ transform: 'scale(1.04)', boxShadow: '0 0 0 8px rgba(0,0,0,0.25)' }, { transform: 'scale(1)', boxShadow: 'none' }], { duration: 500, easing: 'ease-out' }); } catch (e) {}
   try {
     if (!audioCtx) return;
     const o = audioCtx.createOscillator(), g = audioCtx.createGain();
