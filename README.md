@@ -4,7 +4,8 @@
 2026-10-09 に読み取りだけの試作、2026-10-12 にサイズを引く本実装。同日、**ページ本体を GitHub Pages に置く構成**に変えた
 （GAS の iframe の中ではカメラが使えないため。下記）。
 
-- ページ（GitHub Pages）: `https://flutterkaigi.github.io/tshirt-desk/#t=<API_TOKEN>`（リポジトリ: https://github.com/FlutterKaigi/tshirt-desk）
+- ページ（GitHub Pages）: `https://sohichiro.github.io/tshirt-desk/#t=<API_TOKEN>`（リポジトリ: https://github.com/sohichiro/tshirt-desk）
+  FlutterKaigi org に置くと `flutterkaigi.jp/tshirt-desk/` になり、`flutterkaigi.jp` は Cloudflare で `2026.flutterkaigi.jp` へ全部リダイレクトされるので開けない（2026-10-12 に org で作って個人へ移管）
 - GAS（JSON API。ページを直接開くこともできる予備）: https://script.google.com/macros/s/AKfycbzXS_GxHw1p9fvZYJzxxqvR_IPkKsDz2Z3rb4qsOV7aNckFWERaZwZtBlyY6SQX6gH7/exec
   （匿名アクセス用なので **`/macros/s/` の素の形**。`/a/macros/flutterkaigi.jp/` 付きだとログインに飛ばされて fetch できない）
 - スクリプトの ID は `.clasp.json`（git には入れない）と運営の社内メモにある。このリポジトリは公開なので、社内のスプレッドシート ID・スクリプト ID は書かない
@@ -69,9 +70,9 @@ GAS 側は **clasp の `flutterkaigi` アカウント（ウェブアプリの実
    ```
    1 行目が `script.googleusercontent.com` へのリダイレクトなら OK（`accounts.google.com` なら「デプロイを管理 → アクセス」が組織内限定のまま）。
    2 行目の本文が `{"error":"unauthorized"}` か `{"error":"スクリプト プロパティ API_TOKEN…"}` の JSON なら OK（HTML が返るなら切り替わっていない）
-6. （済）`gh repo create FlutterKaigi/tshirt-desk --public --source=. --push` → Pages を有効化:
-   `gh api -X POST repos/FlutterKaigi/tshirt-desk/pages -f build_type=legacy -f 'source[branch]=main' -f 'source[path]=/'`
-7. `https://flutterkaigi.github.io/tshirt-desk/#t=<トークン>` を開き、右上に「NN 人（サイズあり NN）」と出て、①カメラが起動することを確認。
+6. （済）`gh repo create sohichiro/tshirt-desk --public --source=. --push` → Pages を有効化:
+   `gh api -X POST repos/sohichiro/tshirt-desk/pages -f build_type=legacy -f 'source[branch]=main' -f 'source[path]=/'` → `-X PUT … -F https_enforced=true`
+7. `https://sohichiro.github.io/tshirt-desk/#t=<トークン>` を開き、右上に「NN 人（サイズあり NN）」と出て、①カメラが起動することを確認。
    Pages からの fetch（CORS）はここで初めて確かめられる。URL を Slack の受付担当に配る
 
 ## 分かっていること
